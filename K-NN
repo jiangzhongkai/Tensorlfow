@@ -1,0 +1,83 @@
+#最近邻域法
+
+import requests
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+
+#创建一个会话
+sess=tf.Session()
+
+house_url="https://archive.ics.uci.edu/ml/machine-learning-databases/housing/housing.data"
+house_header=['CRIM','ZN','INDUS','CHAS','NOX','RM','AGE','DIS','RAD','TAX','PTRATIO','B','LSTAT','MEDV']
+cols_used=['CRIM','INDUS','NOX','RM','AGE','DIS','TAX','PTRATIO','B','LSTAT']
+num_features=len(cols_used)  #
+#print(num_features)
+
+result_file=requests.get(house_url)
+# print(result_file.text)
+housing_data=[[float(x) for x in y.split(' ') if len(x)>=1] for y in result_file.text.split('\n') if len(y)>=1]
+y_vals=np.transpose([np.array([y[13] for y in housing_data])])   #506x1矩阵
+x_vals=np.array([[x for i,x in enumerate(y) if house_header[i] in cols_used] for y in housing_data ])
+x_vals=(x_vals-x_vals.min(0))/x_vals.ptp(0)  #归一化处理
+
+#接下来将上述的数据集分为训练数据集和测试数据集
+#np.random.seed(0)
+train_indices=np.random.choice(len(x_vals),round(len(x_vals)*0.8),replace=False)  #训练集
+test_indices=np.array(list(set(range(len(x_vals)))-set(train_indices))) #测试集
+
+x_vals_train=x_vals[train_indices]
+x_vals_test=x_vals[test_indices]
+y_vals_train=y_vals[train_indices]
+y_vals_test=y_vals[test_indices]
+
+#数据集准备好了
+
+#接下来是定义相应的变量，占位符
+batch_mse_voc=[]
+predictions_voc=[]
+for k in range(2,10):
+    batch_size = len(x_vals_test)
+    # print(batch_size)
+    x_data_train = tf.placeholder(shape=[None, num_features], dtype=tf.float32)
+    x_data_test = tf.placeholder(shape=[None, num_features], dtype=tf.float32)
+    y_target_train = tf.placeholder(shape=[None, 1], dtype=tf.float32)
+    y_target_test = tf.placeholder(shape=[None, 1], dtype=tf.float32)
+
+    # 为批量测试数据创建距离函数，使用L1范数距离
+    distance = tf.reduce_sum(tf.abs(tf.subtract(x_data_train, tf.expand_dims(x_data_test, 1))), reduction_indices=2)
+
+    top_k_vals, top_k_indices = tf.nn.top_k(tf.negative(distance), k=k)
+    # print(sess.run(top_k_vals))
+    # print(sess.run(top_k_indices))
+    x_sums = tf.expand_dims(tf.reduce_sum(top_k_vals, 1), 1)
+    x_sums_repeated = tf.matmul(x_sums, tf.ones([1, k], tf.float32))
+    x_vals_weights = tf.expand_dims(tf.div(top_k_vals, x_sums_repeated), 1)
+    top_k_yvals = tf.gather(y_target_train, top_k_indices)
+    prediction = tf.squeeze(tf.matmul(x_vals_weights, top_k_yvals), squeeze_dims=[1])
+
+    # 均方误差
+    mse = tf.div(tf.reduce_sum(tf.square(tf.subtract(prediction, y_target_test))), batch_size)
+
+    # 测试
+    num_loop = int(np.ceil(len(x_vals_test) / batch_size))
+    for i in range(num_loop):
+        min_index = i * batch_size
+        max_index = min((i + 1) * batch_size, len(x_vals_train))
+        x_batch = x_vals_test[min_index:max_index]
+        y_batch = y_vals_test[min_index:max_index]
+        predictions = sess.run(prediction, feed_dict={x_data_train: x_vals_train, x_data_test: x_batch,
+                                                      y_target_train: y_vals_train, y_target_test: y_batch})
+        batch_mse = sess.run(mse,feed_dict={x_data_train: x_vals_train, x_data_test: x_batch, y_target_train: y_vals_train,
+                                        y_target_test: y_batch})
+        batch_mse_voc.append(batch_mse)
+        predictions_voc.append(predictions)
+        print("Batch#" + str(i + 1) + ":" + "MSE" + str(np.round(batch_mse, 3)))
+plt.plot(predictions,'g-',label='Prediction',linewidth=3)
+plt.plot(y_batch,'r--',label='Actual',linewidth=2)
+plt.title("Test")
+plt.xlabel("Med Home Value in $1,000s")
+plt.ylabel("Frequency")
+plt.legend(loc="upper left")
+plt.show()
+
